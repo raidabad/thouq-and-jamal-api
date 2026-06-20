@@ -10,17 +10,15 @@ app = FastAPI()
 ULTRAMSG_INSTANCE = "instance181605"
 ULTRAMSG_TOKEN = "lcc1iapeumtgb5dj"
 
-# قراءة المفتاح السري بأمان من بيئة السيرفر
+# 2. قراءة مفاتيح الأمان بأمان من بيئة سيرفر Render
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 # تهيئة عميل الذكاء الاصطناعي لـ Gemini
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 2. قاموس عالمي لتخزين جلسات دردشة الزبائن (الذاكرة)
-# الهيكل سيكون: { "sender_number": chat_session }
-whatsapp_chats = {}
-
-# 3. صياغة "تعليمات النظام" الصارمة لضبط الشخصية والهوية
+# 3. صياغة "تعليمات النظام" الصارمة لضبط الشخصية والهوية الصنعانية الوقورة
 SYSTEM_PROMPT = """
 أنت المساعد الذكي الوقور والمهذب لمتجر (ذوق وجمال) المتواجد في العاصمة صنعاء والمتخصص في العناية بالشعر.
 منتجك الوحيد والحصري الحالي هو: صابونة الشعر الخضراء الطبيعية (Seven Green).
@@ -35,6 +33,55 @@ SYSTEM_PROMPT = """
 7. لا تذكر أو تخترع أي أسعار أخرى أو منتجات أخرى غير صابونة الشعر الخضراء.
 8. شجع العميل في نهاية الرد على إرسال اسمه وعنوانه في صنعاء لتجهيز الطلب فوراً بأسلوب الجمع (أرسلوا لنا اسمكم وعنوانكم).
 """
+
+# دالة برمجية لجلب تاريخ المحادثة من Supabase وترتيبها لـ Gemini
+def get_chat_history_from_supabase(phone_number: str):
+    history_contents = []
+    try:
+        # استعلام لجلب آخر 10 رسائل مرتبة من الأقدم إلى الأحدث لهذا الرقم تحديداً
+        url = f"{SUPABASE_URL}chat_history"
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        params = {
+            "phone_number": f"eq.{phone_number}",
+            "order": "created_at.asc",
+            "limit": "10"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        
+        if response.status_code == 200:
+            records = response.json()
+            for record in records:
+                # تشكيل الهيكل البرمجي القياسي الذي يفهمه نموذج Gemini
+                history_contents.append(
+                    types.Content(
+                        role=record.get("role"),
+                        parts=[types.Part.from_text(text=record.get("content"))]
+                    )
+                )
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء جلب تاريخ المحادثة: {e}")
+    return history_contents
+
+# دالة برمجية لحفظ الرسائل الجديدة في Supabase
+def save_message_to_supabase(phone_number: str, role: str, content: str):
+    try:
+        url = f"{SUPABASE_URL}chat_history"
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "phone_number": phone_number,
+            "role": role,
+            "content": content
+        }
+        requests.post(url, headers=headers, json=data)
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء حفظ الرسالة في السحاب: {e}")
 
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
@@ -58,26 +105,31 @@ async def whatsapp_webhook(request: Request):
         if is_from_me or str(is_from_me).lower() == "true":
             return {"status": "ignored"}
             
-        # 4. إدارة الذاكرة تلقائياً لكل زبون على حدة
-        if sender_number not in whatsapp_chats:
-            # إذا كان الزبون يراسلنا لأول مرة، ننشئ له جلسة دردشة مستقلة ونخزنها في القاموس
-            print(f"🔄 إنشاء جلسة ذاكرة جديدة للرقم: {sender_number}")
-            whatsapp_chats[sender_number] = ai_client.chats.create(
-                model="gemini-2.5-flash",
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.7
-                )
-            )
-            
-        # استدعاء جلسة الدردشة الخاصة بهذا الزبون بالتحديد من القاموس
-        current_chat_session = whatsapp_chats[sender_number]
+        # 1. حفظ رسالة الزبون الجديدة في قاعدة البيانات السحابية فوراً
+        save_message_to_supabase(sender_number, "user", incoming_msg)
         
-        # إرسال الرسالة الجديدة داخل الجلسة (Gemini سيقرأ الـ History تلقائياً ويرد بناءً عليه)
-        ai_response = current_chat_session.send_message(incoming_msg)
+        # 2. سحب سياق المحادثة التاريخي بالكامل من السحاب
+        past_history = get_chat_history_from_supabase(sender_number)
+        print(f"📜 تم استرجاع {len(past_history)} رسالة سابقة للرقم {sender_number}")
+        
+        # 3. فتح جلسة دردشة لـ Gemini وتلقيمها بالتاريخ والتعليمات الصارمة
+        chat = ai_client.chats.create(
+            model="gemini-2.5-flash",
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.7
+            ),
+            history=past_history # هنا السحر! Gemini يقرأ الماضي بالكامل قبل كتابة الرد
+        )
+        
+        # توليد الرد الذكي
+        ai_response = chat.send_message(incoming_msg)
         bot_reply = ai_response.text
         
-        # 5. إرسال الرد الذكي المعتمد على السياق والذاكرة عبر UltraMsg
+        # 4. حفظ رد البوت في قاعدة البيانات السحابية ليتذكره في المرات القادمة
+        save_message_to_supabase(sender_number, "model", bot_reply)
+        
+        # 5. إرسال الرد المعتمد على السياق والذاكرة عبر UltraMsg إلى واتساب العميل
         url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
         payload = {
             "token": ULTRAMSG_TOKEN,
