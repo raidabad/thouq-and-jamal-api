@@ -3,33 +3,68 @@ import requests
 
 app = FastAPI()
 
-# بيانات حسابك في UltraMsg (ستحصل عليها بعد التسجيل)
-ULTRAMSG_INSTANCE = "instance181605"  # استبدله برقم الـ Instance لاحقاً
-ULTRAMSG_TOKEN = "lcc1iapeumtgb5dj"          # استبدله بالـ Token لاحقاً
+# بيانات حسابك الفعالة في UltraMsg
+ULTRAMSG_INSTANCE = "instance181605"
+ULTRAMSG_TOKEN = "lcc1iapeumtgb5dj"
 
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
-    data = await request.json()
-    print("البيانات المستقبلة من الواتساب:", data) # لمراقبة الرسائل في الـ Logs
-    
-    # التحقق من أن البيانات تحتوي على رسالة واردة
-    if "data" in data and "body" in data["data"]:
-        incoming_msg = data["data"]["body"].strip() # نص رسالة الزبون
-        sender_number = data["data"]["from"]       # رقم جوال الزبون
-        is_from_me = data["data"]["fromMe"]         # هل الرسالة صادرة مني؟
+    try:
+        data = await request.json()
+        print("البيانات المستقبلة من الواتساب:", data) # لمراقبة المدخلات في Render Logs
         
-        # لمنع البوت من الرد على رسائله الشخصية والدخول في حلقة مفرغة
-        if is_from_me:
+        # استخراج تفاصيل الرسالة بناءً على الهيكل القياسي لـ UltraMsg
+        msg_data = data.get("data", {})
+        if isinstance(msg_data, list) and len(msg_data) > 0:
+            msg_data = msg_data[0]
+            
+        if not msg_data or "body" not in msg_data:
+            return {"status": "no_message_body"}
+            
+        incoming_msg = str(msg_data.get("body", "")).strip().lower() # نص رسالة الزبون
+        sender_number = msg_data.get("from")               # رقم جوال الزبون
+        is_from_me = msg_data.get("fromMe")                 # هل الرسالة صادرة مني؟
+        
+        # لمنع البوت من الرد على نفسه والدخول في حلقة مفرغة
+        if is_from_me or str(is_from_me).lower() == "true":
             return {"status": "ignored"}
             
-        # منطق الرد الذكي لمتجر ذوق وجمال
+        # منطق الرد الذكي لمتجر ذوق وجمال (صابونة الشعر الخضراء) - نسخة صنعاء
         bot_reply = ""
-        if "سيروم" in incoming_msg or "الأرجان" in incoming_msg:
-            bot_reply = "سيروم الأرجان المغربي الأصلي متوفر بسعر 60 ريال. ✨"
-        elif "السعر" in incoming_msg or "بكم" in incoming_msg:
-            bot_reply = "أهلاً بك في متجر ذوق وجمال! يرجى تحديد المنتج لمعرفة سعره، أو اكتب (سيروم الأرجان)."
+        
+        # إذا استفسر عن الصابونة أو العرض أو الهدية
+        if any(word in incoming_msg for word in ["مرحبا", "صابون", "صابونة", "الخضراء", "مشط", "هدية", "العرض"]):
+            bot_reply = (
+                "أهلاً بك! صابونة الشعر الخضراء الطبيعية متوفرة الآن في متجر ذوق وجمال لتغذية الشعر وتقويته. 🌿🧼\n\n"
+                "🔥 **العرض الخاص الحالي:**\n"
+                "💰 السعر: 8000 ريال يمني فقط!\n"
+                "🚗 التوصيل: مجاني تماماً داخل صنعاء! 🛵💨\n"
+                "🎁 الهدية: مشط متميز مجاناً مع كل صابونة!\n\n"
+                "للطلب الفوري، يرجى تزويدنا بالاسم والعنوان بالتفصيل وسنقوم بتجهيز طلبك وتوصيله إليك فوراً! 🤝"
+            )
+            
+        # إذا استفسر عن السعر أو التوصيل أو الشحن
+        elif any(word in incoming_msg for word in ["السعر", "بكم", "قيمة", "توصيل", "شحن"]):
+            bot_reply = (
+                "أهلاً بك في متجر ذوق وجمال! ✨\n\n"
+                "نوفر لكم خدمة التوصيل المجاني والسريع مباشرة إلى باب بيتك داخل صنعاء! 🚗💨\n\n"
+                "العرض الحالي على (صابونة الشعر الخضراء):\n"
+                "السعر 8000 ريال فقط، والتوصيل مجاني، وبتحصل على مشط هدية! 🎁\n\n"
+                "إذا أحببت قراءة تفاصيل أكثر اكتب كلمة (صابونة)."
+            )
+            
+        # إذا استفسر عن موقع المتجر
+        elif any(word in incoming_msg for word in ["الموقع", "أين", "مكان", "صنعاء"]):
+            bot_reply = "متجر ذوق وجمال متواجد في صنعاء، ونوفر خدمة التوصيل المجاني والسريع مباشرة إلى موقعك داخل العاصمة! 🏙️🛵"
+            
+        # الرد الترحيبي الافتراضي
         else:
-            bot_reply = "أهلاً بك في متجر ذوق وجمال! سيقوم أحد موظفينا بالرد عليك قريباً، أو يمكنك الاستفسار عن أسعار المنتجات مباشرة."
+            bot_reply = (
+                "أهلاً بك في متجر ذوق وجمال! ✨\n\n"
+                "نحن متخصصون في منتجات العناية بالشعر، ومنتجنا الحصري حالياً هو (صابونة الشعر الخضراء) الطبيعية.\n\n"
+                "💡 لدينا عرض لفترة محدودة: صابونة بـ 8000 ريال + توصيل مجاني (داخل صنعاء) + مشط هدية! 🎁\n\n"
+                "للاستفسار أو الطلب اكتب (صابونة)، أو اترك رسالتك وسيرد عليك أحد موظفينا قريباً."
+            )
             
         # إرسال الرد تلقائياً إلى جوال العميل عبر API الخاص بـ UltraMsg
         url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
@@ -40,10 +75,15 @@ async def whatsapp_webhook(request: Request):
         }
         headers = {"content-type": "application/x-www-form-urlencoded"}
         
-        # إطلاق الرسالة
-        requests.post(url, data=payload, headers=headers)
+        # إطلاق الرسالة تلقائياً
+        response = requests.post(url, data=payload, headers=headers)
+        print("حالة إرسال الرد من UltraMsg:", response.status_code, response.text)
         
-    return {"status": "success"}
+        return {"status": "success"}
+        
+    except Exception as e:
+        print(f"حدث خطأ أثناء معالجة الويب هوك: {e}")
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
