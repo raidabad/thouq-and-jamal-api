@@ -83,31 +83,26 @@ def save_message_to_supabase(phone_number: str, role: str, content: str):
         requests.post(url, headers=headers, json=data)
     except Exception as e:
         print(f"⚠️ خطأ أثناء حفظ الرسالة في السحاب: {e}")
-
-# دالة التحقق الإجبارية عند الرابط الرئيسي - تعيد الاستجابة لفيسبوك فوراً بدون تعقيد
+# [1] استقبال التحقق عند الرابط الرئيسي (/) وإعادته لفيسبوك فوراً
 @app.get("/")
 async def verify_webhook_root(request: Request):
     params = request.query_params
     challenge = params.get("hub.challenge")
-    
-    # إذا كان الطلب يحتوي على الرمز المطلوب من فيسبوك، أرسله له فوراً وبشكل مباشر
     if challenge:
-        print(f"🎯 إرسال الرمز الإجباري لفيسبوك: {challenge}")
+        print(f"🎯 تم إرسال رمز التحدي الرئيسي بنجاح: {challenge}")
         return Response(content=challenge, media_type="text/plain")
-        
     return {"status": "Thouq and Jamal API is running"}
 
-# دالة التحقق الاحتياطية عند مسار /webhook - تعيد الاستجابة مباشرة أيضاً
+# [2] استقبال التحقق عند مسار (/webhook) وإعادته لفيسبوك فوراً 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
     challenge = params.get("hub.challenge")
-    
     if challenge:
-        print(f"🎯 إرسال الرمز الإجباري لمسار الويب هوك: {challenge}")
+        print(f"🎯 تم إرسال رمز تحدي الويب هوك بنجاح: {challenge}")
         return Response(content=challenge, media_type="text/plain")
-        
-    raise HTTPException(status_code=400, detail="Missing parameters")
+    return {"status": "Webhook path is ready"}
+
 
 # [ثانياً] دالة استقبال الرسائل ومعالجتها والرد عليها عبر Meta API (POST)
 @app.post("/webhook")
