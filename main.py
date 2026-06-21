@@ -84,7 +84,21 @@ def save_message_to_supabase(phone_number: str, role: str, content: str):
     except Exception as e:
         print(f"⚠️ خطأ أثناء حفظ الرسالة في السحاب: {e}")
 
-# [أولاً] دالة التحقق من الـ Webhook المخصصة لمطوري فيسبوك (GET)
+# [تعديل هام] دالة التحقق عند الرابط الرئيسي لضمان قبول فيسبوك فوراً والتخلص من خطأ 404
+@app.get("/")
+async def verify_webhook_root(request: Request):
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    
+    if mode and token:
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            print("✅ تم التحقق من الرابط الرئيسي بنجاح من قبل Meta!")
+            return Response(content=challenge, media_type="text/plain")
+    return {"status": "Thouq and Jamal API is running"}
+
+# دالة التحقق عند مسار /webhook (تثبيت احتياطي)
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
@@ -94,7 +108,7 @@ async def verify_webhook(request: Request):
     
     if mode and token:
         if mode == "subscribe" and token == VERIFY_TOKEN:
-            print("✅ تم التحقق من الـ Webhook بنجاح من قبل Meta!")
+            print("✅ تم التحقق من مسار /webhook بنجاح من قبل Meta!")
             return Response(content=challenge, media_type="text/plain")
         else:
             raise HTTPException(status_code=403, detail="Verification token mismatch")
