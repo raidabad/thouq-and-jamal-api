@@ -1,22 +1,25 @@
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response, HTTPException
 import requests
 from google import genai
 from google.genai import types
 
 app = FastAPI()
 
-# 1. بيانات حسابك الفعالة في UltraMsg
-ULTRAMSG_INSTANCE = "instance181605"
-ULTRAMSG_TOKEN = "lcc1iapeumtgb5dj"
+# 1. جلب متغيرات واجهة Meta الرسمية بأمان من بيئة سيرفر Render
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 
-# 2. قراءة مفاتيح الأمان بأمان من بيئة سيرفر Render
+# 2. قراءة مفاتيح الأمان لـ Gemini و Supabase
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 # تهيئة عميل الذكاء الاصطناعي لـ Gemini
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# رمز التحقق الثابت للـ Webhook في Meta
+VERIFY_TOKEN = "thouq-and-jamal-db"
 
 # 3. صياغة "تعليمات النظام" الصارمة لضبط الشخصية والهوية الصنعانية الوقورة
 SYSTEM_PROMPT = """
@@ -38,7 +41,6 @@ SYSTEM_PROMPT = """
 def get_chat_history_from_supabase(phone_number: str):
     history_contents = []
     try:
-        # استعلام لجلب آخر 10 رسائل مرتبة من الأقدم إلى الأحدث لهذا الرقم تحديداً
         url = f"{SUPABASE_URL}chat_history"
         headers = {
             "apikey": SUPABASE_KEY,
@@ -54,7 +56,6 @@ def get_chat_history_from_supabase(phone_number: str):
         if response.status_code == 200:
             records = response.json()
             for record in records:
-                # تشكيل الهيكل البرمجي القياسي الذي يفهمه نموذج Gemini
                 history_contents.append(
                     types.Content(
                         role=record.get("role"),
@@ -83,68 +84,91 @@ def save_message_to_supabase(phone_number: str, role: str, content: str):
     except Exception as e:
         print(f"⚠️ خطأ أثناء حفظ الرسالة في السحاب: {e}")
 
-@app.post("/whatsapp")
+# [أولاً] دالة التحقق من الـ Webhook المخصصة لمطوري فيسبوك (GET)
+@app.get("/webhook")
+async def verify_webhook(request: Request):
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    
+    if mode and token:
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            print("✅ تم التحقق من الـ Webhook بنجاح من قبل Meta!")
+            return Response(content=challenge, media_type="text/plain")
+        else:
+            raise HTTPException(status_code=403, detail="Verification token mismatch")
+    raise HTTPException(status_code=400, detail="Missing parameters")
+
+# [ثانياً] دالة استقبال الرسائل ومعالجتها والرد عليها عبر Meta API (POST)
+@app.post("/webhook")
 async def whatsapp_webhook(request: Request):
     try:
         data = await request.json()
-        print("البيانات المستقبلة من الواتساب:", data)
+        print("📩 بيانات مستقبلة من Meta Webhook:", data)
         
-        # استخراج تفاصيل الرسالة بناءً على هيكل UltraMsg
-        msg_data = data.get("data", {})
-        if isinstance(msg_data, list) and len(msg_data) > 0:
-            msg_data = msg_data[0]
-            
-        if not msg_data or "body" not in msg_data:
-            return {"status": "no_message_body"}
-            
-        incoming_msg = str(msg_data.get("body", "")).strip() # نص رسالة الزبون
-        sender_number = msg_data.get("from")                 # رقم جوال الزبون
-        is_from_me = msg_data.get("fromMe")                 # هل الرسالة صادرة مني؟
-        
-        # لمنع البوت من الرد على نفسه والدخول في حلقة مفرغة
-        if is_from_me or str(is_from_me).lower() == "true":
-            return {"status": "ignored"}
-            
-        # 1. حفظ رسالة الزبون الجديدة في قاعدة البيانات السحابية فوراً
-        save_message_to_supabase(sender_number, "user", incoming_msg)
-        
-        # 2. سحب سياق المحادثة التاريخي بالكامل من السحاب
-        past_history = get_chat_history_from_supabase(sender_number)
-        print(f"📜 تم استرجاع {len(past_history)} رسالة سابقة للرقم {sender_number}")
-        
-        # 3. فتح جلسة دردشة لـ Gemini وتلقيمها بالتاريخ والتعليمات الصارمة
-        chat = ai_client.chats.create(
-            model="gemini-2.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.7
-            ),
-            history=past_history # هنا السحر! Gemini يقرأ الماضي بالكامل قبل كتابة الرد
-        )
-        
-        # توليد الرد الذكي
-        ai_response = chat.send_message(incoming_msg)
-        bot_reply = ai_response.text
-        
-        # 4. حفظ رد البوت في قاعدة البيانات السحابية ليتذكره في المرات القادمة
-        save_message_to_supabase(sender_number, "model", bot_reply)
-        
-        # 5. إرسال الرد المعتمد على السياق والذاكرة عبر UltraMsg إلى واتساب العميل
-        url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
-        payload = {
-            "token": ULTRAMSG_TOKEN,
-            "to": sender_number,
-            "body": bot_reply
-        }
-        headers = {"content-type": "application/x-www-form-urlencoded"}
-        
-        response = requests.post(url, data=payload, headers=headers)
-        print("حالة إرسال الرد من UltraMsg:", response.status_code, response.text)
-        
+        # التحقق من هيكلية الرسالة الواردة من ميتا لضمان وجود رسالة نصية فعالة
+        if "entry" in data and data["entry"]:
+            changes = data["entry"][0].get("changes", [])
+            if changes and "value" in changes[0]:
+                value = changes[0]["value"]
+                messages = value.get("messages", [])
+                
+                if messages:
+                    msg = messages[0]
+                    # استقبال رسائل النصوص فقط
+                    if msg.get("type") == "text":
+                        incoming_msg = msg["text"].get("body", "").strip()
+                        sender_number = msg.get("from") # رقم العميل (صيغة دولية مثل 96777xxxxxx)
+                        
+                        # 1. حفظ رسالة الزبون في قاعدة بيانات Supabase فوراً
+                        save_message_to_supabase(sender_number, "user", incoming_msg)
+                        
+                        # 2. سحب سياق المحادثة التاريخي من السحاب لـ Gemini
+                        past_history = get_chat_history_from_supabase(sender_number)
+                        print(f"📜 تم استرجاع {len(past_history)} رسالة سابقة للرقم {sender_number}")
+                        
+                        # 3. فتح جلسة دردشة لـ Gemini وتلقيمها بالتاريخ والتعليمات الصنعانية
+                        chat = ai_client.chats.create(
+                            model="gemini-2.5-flash",
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.7
+                            ),
+                            history=past_history
+                        )
+                        
+                        # توليد الرد الذكي
+                        ai_response = chat.send_message(incoming_msg)
+                        bot_reply = ai_response.text
+                        
+                        # 4. حفظ رد البوت في قاعدة بيانات Supabase
+                        save_message_to_supabase(sender_number, "model", bot_reply)
+                        
+                        # 5. إرسال الرد الرسمي المجاني عبر واجهة Meta Cloud API إلى العميل
+                        url = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
+                        headers = {
+                            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                            "Content-Type": "application/json"
+                        }
+                        payload = {
+                            "messaging_product": "whatsapp",
+                            "recipient_type": "individual",
+                            "to": sender_number,
+                            "type": "text",
+                            "text": {
+                                "preview_url": False,
+                                "body": bot_reply
+                            }
+                        }
+                        
+                        response = requests.post(url, json=payload, headers=headers)
+                        print("حالة إرسال الرد من Meta Cloud API:", response.status_code, response.text)
+                        
         return {"status": "success"}
         
     except Exception as e:
-        print(f"حدث خطأ أثناء معالجة الويب هوك: {e}")
+        print(f"حدث خطأ أثناء معالجة الويب هوك لـ Meta: {e}")
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
