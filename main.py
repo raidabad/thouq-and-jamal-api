@@ -84,34 +84,29 @@ def save_message_to_supabase(phone_number: str, role: str, content: str):
     except Exception as e:
         print(f"⚠️ خطأ أثناء حفظ الرسالة في السحاب: {e}")
 
-# [تعديل هام] دالة التحقق عند الرابط الرئيسي لضمان قبول فيسبوك فوراً والتخلص من خطأ 404
+# دالة التحقق الإجبارية عند الرابط الرئيسي - تعيد الاستجابة لفيسبوك فوراً بدون تعقيد
 @app.get("/")
 async def verify_webhook_root(request: Request):
     params = request.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
     
-    if mode and token:
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            print("✅ تم التحقق من الرابط الرئيسي بنجاح من قبل Meta!")
-            return Response(content=challenge, media_type="text/plain")
+    # إذا كان الطلب يحتوي على الرمز المطلوب من فيسبوك، أرسله له فوراً وبشكل مباشر
+    if challenge:
+        print(f"🎯 إرسال الرمز الإجباري لفيسبوك: {challenge}")
+        return Response(content=challenge, media_type="text/plain")
+        
     return {"status": "Thouq and Jamal API is running"}
 
-# دالة التحقق عند مسار /webhook (تثبيت احتياطي)
+# دالة التحقق الاحتياطية عند مسار /webhook - تعيد الاستجابة مباشرة أيضاً
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
     
-    if mode and token:
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            print("✅ تم التحقق من مسار /webhook بنجاح من قبل Meta!")
-            return Response(content=challenge, media_type="text/plain")
-        else:
-            raise HTTPException(status_code=403, detail="Verification token mismatch")
+    if challenge:
+        print(f"🎯 إرسال الرمز الإجباري لمسار الويب هوك: {challenge}")
+        return Response(content=challenge, media_type="text/plain")
+        
     raise HTTPException(status_code=400, detail="Missing parameters")
 
 # [ثانياً] دالة استقبال الرسائل ومعالجتها والرد عليها عبر Meta API (POST)
